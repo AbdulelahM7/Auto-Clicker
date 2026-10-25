@@ -1,0 +1,78 @@
+name: Release
+
+# Push a tag like v1.0.0 to build the installer + portable exe and publish a GitHub Release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Work out version
+        id: ver
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt pyinstaller
+
+      - name: Build app folder
+        run: >
+          python -m PyInstaller --noconfirm --clean --windowed
+          --name AutoClicker --icon assets/icon.ico
+          --collect-all customtkinter
+          --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32
+          auto_clicker.py
+
+      - name: Build portable exe
+        run: >
+          python -m PyInstaller --noconfirm --clean --onefile --windowed
+          --name AutoClicker-portable --icon assets/icon.ico
+          --collect-all customtkinter
+          --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32
+          --distpath dist-portable --workpath build-portable
+          auto_clicker.py
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=${{ steps.ver.outputs.version }}" installer\AutoClicker.iss
+
+      - name: Collect release files
+        shell: pwsh
+        run: |
+          Move-Item dist-portable\AutoClicker-portable.exe "dist-installer\AutoClicker-portable-${{ steps.ver.outputs.version }}.exe"
+          Get-ChildItem dist-installer\*.exe | Get-FileHash -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
+            Set-Content dist-installer\SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AutoClicker-${{ steps.ver.outputs.version }}
+          path: dist-installer/*
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-installer/*
+          generate_release_notes: true

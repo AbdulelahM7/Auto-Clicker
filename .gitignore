@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# PyInstaller / build output
+build/
+build-portable/
+dist/
+dist-portable/
+dist-installer/
+*.spec
+
+# IDE / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
