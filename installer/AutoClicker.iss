@@ -1,9 +1,9 @@
 ; Inno Setup script — builds the Windows installer for Auto Clicker.
-; Build the app first (build.bat), then:
-;   ISCC.exe /DAppVersion=1.0.0 installer\AutoClicker.iss
+; Build the app first (build.bat), which passes /DAppVersion=<__version__> automatically:
+;   ISCC.exe /DAppVersion=1.0.1 installer\AutoClicker.iss
 
 #ifndef AppVersion
-  #define AppVersion "1.0.0"
+  #define AppVersion "1.0.1"
 #endif
 #define AppName "Auto Clicker"
 #define AppExe "AutoClicker.exe"
@@ -12,7 +12,8 @@
 AppId={{B6F2D9A4-5C1E-4E7B-9A3D-2F8C61D7E0B5}
 AppName={#AppName}
 AppVersion={#AppVersion}
-AppPublisher=AbdulelahM7
+VersionInfoVersion={#AppVersion}.0
+AppPublisher=E7TRAF702
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
@@ -39,6 +40,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "..\dist\AutoClicker\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"

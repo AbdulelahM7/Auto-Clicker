@@ -3,7 +3,10 @@ REM Builds: dist\AutoClicker\ (app folder), dist-portable\AutoClicker-portable.e
 REM and, if Inno Setup 6 is installed, dist-installer\AutoClicker-Setup-<version>.exe
 setlocal
 cd /d "%~dp0"
-set VERSION=1.0.0
+
+for /f "delims=" %%v in ('py -c "import autoclicker; print(autoclicker.__version__)"') do set VERSION=%%v
+if "%VERSION%"=="" set VERSION=1.0.1
+echo Building Auto Clicker v%VERSION%...
 
 echo [1/4] Installing dependencies...
 py -m pip install -r requirements.txt pyinstaller
@@ -15,11 +18,11 @@ if exist dist-portable rmdir /s /q dist-portable
 if exist build-portable rmdir /s /q build-portable
 
 echo [2/4] Building app folder (used by the installer)...
-py -m PyInstaller --noconfirm --clean --windowed --name AutoClicker --icon assets\icon.ico --collect-all customtkinter --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 auto_clicker.py
+py -m PyInstaller --noconfirm --clean --windowed --name AutoClicker --icon assets\icon.ico --collect-all customtkinter --collect-all pystray --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 auto_clicker.py
 if errorlevel 1 goto :fail
 
 echo [3/4] Building portable single-file exe...
-py -m PyInstaller --noconfirm --clean --onefile --windowed --name AutoClicker-portable --icon assets\icon.ico --collect-all customtkinter --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 --distpath dist-portable --workpath build-portable auto_clicker.py
+py -m PyInstaller --noconfirm --clean --onefile --windowed --name AutoClicker-portable --icon assets\icon.ico --collect-all customtkinter --collect-all pystray --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 --distpath dist-portable --workpath build-portable auto_clicker.py
 if errorlevel 1 goto :fail
 
 echo [4/4] Building installer...

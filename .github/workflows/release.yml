@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag like v1.0.0 to build the installer + portable exe and publish a GitHub Release.
+# Push a tag like v1.0.1 to build the installer + portable exe and publish a GitHub Release.
 on:
   push:
     tags: ["v*"]
@@ -20,24 +20,28 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Work out version
+      - name: Work out version from code or tag
         id: ver
         shell: bash
         run: |
+          CODE_VER=$(python -c "import autoclicker; print(autoclicker.__version__)")
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           else
-            echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
+            echo "version=${CODE_VER}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt pyinstaller
+        run: python -m pip install -r requirements.txt pytest pyinstaller
+
+      - name: Run unit tests before packaging
+        run: pytest -v
 
       - name: Build app folder
         run: >
           python -m PyInstaller --noconfirm --clean --windowed
           --name AutoClicker --icon assets/icon.ico
-          --collect-all customtkinter
+          --collect-all customtkinter --collect-all pystray
           --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32
           auto_clicker.py
 
@@ -45,7 +49,7 @@ jobs:
         run: >
           python -m PyInstaller --noconfirm --clean --onefile --windowed
           --name AutoClicker-portable --icon assets/icon.ico
-          --collect-all customtkinter
+          --collect-all customtkinter --collect-all pystray
           --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32
           --distpath dist-portable --workpath build-portable
           auto_clicker.py

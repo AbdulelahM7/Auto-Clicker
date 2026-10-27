@@ -7,6 +7,7 @@
 A lightweight, dark-mode auto clicker for Windows with a built-in **Minecraft Java hit mode** that times every swing to your weapon's attack cooldown.
 
 ![Platform](https://img.shields.io/badge/platform-Windows-4A63D8)
+![Version](https://img.shields.io/badge/version-1.0.1-4A63D8)
 ![Python](https://img.shields.io/badge/python-3.9%2B-4A63D8)
 ![License](https://img.shields.io/badge/license-MIT-4A63D8)
 
@@ -14,23 +15,18 @@ A lightweight, dark-mode auto clicker for Windows with a built-in **Minecraft Ja
 
 </div>
 
-<!-- Add a screenshot: save it as docs/screenshot.png and uncomment the next line.
-![Screenshot](docs/screenshot.png)
--->
-
 ## Features
 
+- **Action modes**: **Click** (repeated clicking) or **Hold** (continuous mouse hold for breaking blocks or AFK farming)
 - **Mouse button**: left, middle or right
-- **Interval** in milliseconds, with a **click limit** (`0` = unlimited)
-- **Double click** option
-- **Random extra delay** to vary the timing
-- **Live counter** with elapsed time and clicks per second
-- **Global start/stop key** (default `F6`) that works from any window, and you can **change it** in *Options*
-- **Minecraft hit mode**: pick your weapon and the interval is set for you (see below)
-- **Corner safety stop**: move the cursor to the top-left corner to halt clicking instantly
-- **Always on top** option, and settings are **saved automatically**
-- Drift-free timing with 1 ms timer resolution on Windows, so short intervals stay accurate
-- Input validation with clear messages, and errors are logged instead of crashing the app
+- **Interval** in milliseconds, with a **click limit** (`0` = unlimited) and **time limit in minutes** (`0` = unlimited)
+- **Presets**: built-in and custom presets (*Sword*, *Mob Farm*, *Mining Hold*, *AFK Right-Click*) with one-click switching
+- **Double click** & **random extra delay** options
+- **Live counter & performance telemetry**: shows elapsed time, clicks/s, CPU usage (`%`), and post-run timing accuracy (average interval and max deviation in `ms`)
+- **Macro location modes**: click at current **Cursor**, a **Fixed** point, or cycle through a **Sequence** of points recorded with `F8`
+- **Audio feedback**: optional `winsound` beep on Start/Stop when the window is behind your game
+- **Single-instance guard & High-DPI layout**: Windows Mutex prevents duplicate `F6` triggers, and scrollable High-DPI pages keep the **Start** button accessible at 150%+ scaling
+- **System tray & update check**: optional minimize-to-tray and one-click GitHub Releases update check
 
 ## Download
 
@@ -42,94 +38,53 @@ Get the latest build from the **[Releases](../../releases/latest)** page:
 | `AutoClicker-portable-x.y.z.exe` | Single file, no installation. |
 | `SHA256SUMS.txt` | Checksums to verify your download. |
 
-> **Windows SmartScreen / antivirus:** the builds are not code-signed, so Windows may show *"Windows protected your PC"*. Click **More info → Run anyway**. Some antivirus tools also flag any program that registers a global keyboard hook (needed to detect the start/stop key). The full source is in this repository, so you can read it or [build it yourself](#build-from-source).
-
-## Usage
-
-1. Move the mouse over what you want to click.
-2. Press **F6** to start, and press it again to stop. (The on-screen **Start** button begins after a short delay so you can move the cursor off the button first. You can change the delay in *Options*.)
-3. To change the key, open **Options**, click the key box, then press the new key. `Esc` cancels.
-
-Tip: function keys are the safest choice. A letter key would also trigger while you type in other apps.
-
 ## Minecraft hit mode
 
 In **Minecraft: Java Edition**, a weapon deals reduced damage (and no critical or sweep hits) unless its attack cooldown has fully recharged. Clicking faster than that just wastes swings.
 
-Turn on **Minecraft hit** and pick your weapon. The interval is calculated for a fully charged hit and every other click setting is locked (greyed out). Turn it off and your own settings come back exactly as you left them.
+Turn on **Minecraft hit** and pick your weapon or tool. Full charge takes `20 ÷ attack speed` game ticks (1 tick = 50 ms), rounded up to a whole tick plus a 10 ms safety margin:
 
-Full charge takes `20 ÷ attack speed` game ticks (1 tick = 50 ms). The interval is rounded up to a whole tick, plus a 10 ms safety margin:
-
-| Weapon | Attack speed | Interval |
+| Weapon / Tool | Attack speed | Interval |
 |---|---|---|
 | Sword (all types) | 1.6 | 660 ms |
 | Axe: wood / stone / copper | 0.8 | 1260 ms |
 | Axe: iron | 0.9 | 1160 ms |
 | Axe: gold / diamond / netherite | 1.0 | 1010 ms |
+| Pickaxe (all types) | 1.2 | 860 ms |
+| Shovel (all types) | 1.0 | 1010 ms |
+| Hoe: wood / gold / copper | 1.0 | 1010 ms |
+| Hoe: stone | 2.0 | 510 ms |
+| Hoe: iron | 3.0 | 360 ms |
+| Hoe: diamond / netherite | 4.0 | 260 ms |
 | Trident | 1.1 | 960 ms |
+| Spear | 1.2 | 860 ms |
 | Mace | 0.6 | 1710 ms |
 | Fist | 4.0 | 260 ms |
+| Custom speed | User-defined | Calculated automatically |
 
-Notes:
-- **Java Edition only.** Bedrock Edition has no attack cooldown.
-- Other items (pickaxes, shovels, hoes, spears) have different speeds and aren't listed yet. Use the normal mode with your own interval for those.
-- The game processes input once per tick, so results can vary by one tick (50 ms).
+### Minecraft & Server Disclaimer
+- **Not an official Minecraft product:** This project is not affiliated with, endorsed by, or associated with **Mojang Studios** or **Microsoft**.
+- **Fair Play & Multiplayer Warning:** Many multiplayer Minecraft servers forbid auto-clickers and macros. Using automated input on multiplayer servers may lead to an account ban. **Use entirely at your own risk.**
 
-## Build from source
-
-Requires Windows and Python 3.9+ (the `py` launcher).
+## Build & Test from Source
 
 ```powershell
 git clone https://github.com/E7TRAF702/auto-clicker.git
 cd auto-clicker
-py -m pip install -r requirements.txt
+py -m pip install -r requirements.txt pytest ruff
 py auto_clicker.py
 ```
 
-### Build the exe and installer
+- Run unit tests: `py -m unittest discover -s tests -v` (or `pytest -v`)
+- Run timing benchmark: `py tools/benchmark.py`
+- Build installer & portable exe: `build.bat` (reads `__version__` from `autoclicker/__init__.py` automatically)
 
-```powershell
-build.bat
-```
+## Code Signing Policy & Privacy
 
-This produces:
-
-- `dist-portable\AutoClicker-portable.exe`: single-file exe
-- `dist-installer\AutoClicker-Setup-<version>.exe`: installer, built with [Inno Setup 6](https://jrsoftware.org/isdl.php) (skipped if it isn't installed)
-
-Set the version at the top of `build.bat` and in `installer/AutoClicker.iss` (or pass `/DAppVersion=...`).
-
-### Publish a release (GitHub Actions)
-
-Pushing a version tag builds everything on GitHub and attaches the files to a new Release:
-
-```powershell
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-## Settings and logs
-
-Saved in `%APPDATA%\AutoClicker\`:
-
-- `settings.json`: your options (delete it to reset)
-- `error.log`: details if something goes wrong
-
-## Privacy
-
-Everything runs locally. The app makes no network connections and collects no data. It listens to the keyboard only to detect your start/stop key, and nothing is recorded or stored.
-
-## Troubleshooting
-
-| Problem | Fix |
-|---|---|
-| Clicks don't register in some windows | Windows blocks input into apps running as administrator. Run Auto Clicker as administrator too. |
-| Clicking stops immediately | The cursor is in the top-left corner (safety stop). Move it away or turn the option off. |
-| The key doesn't react | Another app may be using the same key. Choose a different one in *Options*. |
-| Very short intervals miss clicks | Some apps can't process input that fast. Try a longer interval. |
-
-macOS and Linux: the code is built on cross-platform libraries and may run, but it is only developed and tested for Windows. On macOS you must grant Accessibility permission to the app.
+- Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+- **Committers, Reviewers, and Approvers:** [E7TRAF702](https://github.com/E7TRAF702).
+- **Privacy Policy:** This program will not transfer any information to other networked systems unless specifically requested by the user (when clicking *Check for updates* in *Options* to query GitHub Releases).
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) · [Third-Party Notices](THIRD_PARTY_NOTICES.md)

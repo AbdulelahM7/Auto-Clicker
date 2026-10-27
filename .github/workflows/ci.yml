@@ -4,14 +4,33 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
 
 jobs:
-  syntax:
-    runs-on: ubuntu-latest
+  lint-and-test:
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Check syntax
-        run: python -m py_compile auto_clicker.py
+          cache: pip
+
+      - name: Install dependencies & test tools
+        run: python -m pip install -r requirements.txt ruff pytest pyinstaller
+
+      - name: Lint with ruff
+        run: ruff check .
+
+      - name: Run unit tests with pytest
+        run: pytest -v
+
+      - name: Dry-run PyInstaller portable build
+        run: >
+          python -m PyInstaller --noconfirm --clean --onefile --windowed
+          --name AutoClicker-portable --icon assets/icon.ico
+          --collect-all customtkinter --collect-all pystray
+          --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32
+          --distpath dist-portable --workpath build-portable
+          auto_clicker.py
