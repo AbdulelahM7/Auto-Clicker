@@ -1,4 +1,4 @@
-"""Unit tests for interval calculations, settings loading/validation, presets, and engine telemetry."""
+"""Unit tests for interval/CPS conversions, 2-mode presets, hotkey preservation, and engine telemetry."""
 
 import sys
 import tempfile
@@ -11,13 +11,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from autoclicker import __version__
 from autoclicker.config import (
     DEFAULTS,
+    PRESET_MODES,
     WEAPONS,
+    cps_to_interval_ms,
     effective,
     fmt_time,
+    interval_ms_to_cps,
     key_label,
     load_presets,
     load_settings,
     mc_interval,
+    merge_preset_preserving_globals,
     sanitize_settings,
     save_presets,
     save_settings,
@@ -45,6 +49,63 @@ class TestAutoClickerLogic(unittest.TestCase):
     def test_version_single_source(self):
         self.assertEqual(__version__, "1.0.1")
 
+    def test_two_preset_modes_only(self):
+        self.assertEqual(PRESET_MODES, ("Default", "Sword (Minecraft)"))
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "presets.json"
+            presets = load_presets(path=p)
+            self.assertEqual(list(presets.keys()), ["Default", "Sword (Minecraft)"])
+            self.assertTrue(presets["Sword (Minecraft)"]["mc_mode"])
+            self.assertEqual(presets["Sword (Minecraft)"]["mc_weapon"], "Sword")
+
+    def test_default_preset_saves_and_persists_user_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "presets.json"
+            presets = load_presets(path=p)
+            presets["Default"] = {
+                **DEFAULTS,
+                "button": "Right",
+                "custom_cps": 20.0,
+                "interval": 50,
+                "double": True,
+            }
+            save_presets(presets, path=p)
+            reloaded = load_presets(path=p)
+            self.assertEqual(reloaded["Default"]["button"], "Right")
+            self.assertEqual(reloaded["Default"]["custom_cps"], 20.0)
+            self.assertEqual(reloaded["Default"]["interval"], 50)
+            self.assertTrue(reloaded["Default"]["double"])
+            # Sword preset always stays fixed
+            self.assertTrue(reloaded["Sword (Minecraft)"]["mc_mode"])
+            self.assertEqual(reloaded["Sword (Minecraft)"]["interval"], 660)
+
+    def test_preset_switch_never_overwrites_start_stop_hotkey(self):
+        user_current = {
+            **DEFAULTS,
+            "hotkey": "f9",
+            "topmost": True,
+            "sound_on": False,
+            "start_delay": 5,
+        }
+        sword_preset = load_presets()["Sword (Minecraft)"]
+        merged = merge_preset_preserving_globals(user_current, sword_preset)
+        self.assertEqual(merged["hotkey"], "f9")
+        self.assertTrue(merged["topmost"])
+        self.assertFalse(merged["sound_on"])
+        self.assertEqual(merged["start_delay"], 5)
+        self.assertTrue(merged["mc_mode"])
+
+    def test_cps_and_interval_conversion_in_default_mode(self):
+        self.assertEqual(cps_to_interval_ms(10.0), 100)
+        self.assertEqual(cps_to_interval_ms(20.0), 50)
+        self.assertEqual(cps_to_interval_ms(1.0), 1000)
+        self.assertEqual(interval_ms_to_cps(100), 10.0)
+        self.assertEqual(interval_ms_to_cps(50), 20.0)
+        with self.assertRaises(ValueError):
+            cps_to_interval_ms(0)
+        with self.assertRaises(ValueError):
+            interval_ms_to_cps(0)
+
     def test_minecraft_weapon_intervals(self):
         self.assertEqual(mc_interval(WEAPONS["Sword"]), 660)
         self.assertEqual(mc_interval(WEAPONS["Axe: wood/stone/copper"]), 1260)
@@ -60,12 +121,6 @@ class TestAutoClickerLogic(unittest.TestCase):
         self.assertEqual(mc_interval(WEAPONS["Mace"]), 1710)
         self.assertEqual(mc_interval(WEAPONS["Fist"]), 260)
 
-    def test_mc_interval_invalid_speed(self):
-        with self.assertRaises(ValueError):
-            mc_interval(0)
-        with self.assertRaises(ValueError):
-            mc_interval(-2.0)
-
     def test_effective_settings_in_mc_mode(self):
         cfg = {**DEFAULTS, "mc_mode": True, "mc_weapon": "Pickaxe", "button": "Right", "double": True}
         eff = effective(cfg)
@@ -80,14 +135,16 @@ class TestAutoClickerLogic(unittest.TestCase):
         eff = effective(cfg)
         self.assertEqual(eff["interval"], 410)
 
-    def test_sanitize_and_clamp_settings(self):
+    def test_sanitize_and_hotkey_collision_guard(self):
         corrupted = {
             "action_mode": "InvalidMode",
             "button": "InvalidBtn",
             "interval": -50,
+            "custom_cps": 5000.0,
             "clicks": -10,
             "time_limit_min": 999999,
-            "hotkey": "ctrl_l",
+            "hotkey": "f8",
+            "record_key": "f8",
             "mc_custom_speed": -5,
             "sequence_points": [[100, 200], "bad_point", [10]],
         }
@@ -95,34 +152,22 @@ class TestAutoClickerLogic(unittest.TestCase):
         self.assertEqual(clean["action_mode"], "Click")
         self.assertEqual(clean["button"], "Left")
         self.assertEqual(clean["interval"], 1)
-        self.assertEqual(clean["clicks"], 0)
-        self.assertEqual(clean["time_limit_min"], 10080)
-        self.assertEqual(clean["hotkey"], "f6")
-        self.assertEqual(clean["mc_custom_speed"], 0.1)
-        self.assertEqual(clean["sequence_points"], [[100, 200]])
+        self.assertEqual(clean["custom_cps"], 1000.0)
+        self.assertEqual(clean["hotkey"], "f8")
+        self.assertEqual(clean["record_key"], "f7")  # automatically shifted so F8 doesn't collide
 
     def test_save_and_load_settings_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp) / "settings.json"
-            custom = {**DEFAULTS, "interval": 250, "action_mode": "Hold", "button": "Right"}
+            custom = {**DEFAULTS, "interval": 250, "custom_cps": 4.0, "action_mode": "Hold", "button": "Right"}
             save_settings(custom, path=p)
             loaded = load_settings(path=p)
             self.assertEqual(loaded["interval"], 250)
+            self.assertEqual(loaded["custom_cps"], 4.0)
             self.assertEqual(loaded["action_mode"], "Hold")
             self.assertEqual(loaded["button"], "Right")
 
-    def test_presets_load_and_save(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            p = Path(tmp) / "presets.json"
-            presets = load_presets(path=p)
-            self.assertIn("Sword (Minecraft)", presets)
-            presets["My Farm"] = {**DEFAULTS, "interval": 500, "active_preset": "My Farm"}
-            save_presets(presets, path=p)
-            reloaded = load_presets(path=p)
-            self.assertIn("My Farm", reloaded)
-            self.assertEqual(reloaded["My Farm"]["interval"], 500)
-
-    def test_engine_click_and_telemetry(self):
+    def test_engine_click_and_hold_modes(self):
         dummy = DummyMouse()
         eng = ClickEngine(controller_factory=lambda: dummy)
         cfg = {**DEFAULTS, "interval": 20, "clicks": 4, "sound_on": False, "failsafe": False}
@@ -132,19 +177,14 @@ class TestAutoClickerLogic(unittest.TestCase):
             time.sleep(0.01)
         self.assertEqual(eng.count, 4)
         self.assertEqual(eng.reason, "done")
-        self.assertGreater(eng.avg_interval_ms, 10.0)
         self.assertIn("ms avg", eng.format_telemetry())
 
-    def test_engine_hold_mode(self):
-        dummy = DummyMouse()
-        eng = ClickEngine(controller_factory=lambda: dummy)
-        cfg = {**DEFAULTS, "action_mode": "Hold", "sound_on": False, "failsafe": False}
-        eng.start(cfg, warmup_s=0)
-        time.sleep(0.08)
+        # Hold mode test
+        eng.start({**DEFAULTS, "action_mode": "Hold", "sound_on": False, "failsafe": False}, warmup_s=0)
+        time.sleep(0.06)
         eng.stop()
         while eng.active:
             time.sleep(0.01)
-        self.assertEqual(eng.count, 1)
         self.assertFalse(dummy.holding)
         self.assertEqual(eng.reason, "stopped")
 

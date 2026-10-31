@@ -1,4 +1,4 @@
-"""CustomTkinter UI with DPI-safe scrollable pages, 4Hz stats refresh, presets, tray icon, and update check."""
+"""CustomTkinter UI with 2-mode presets, editable CPS in Default mode, DPI-safe scroll, and tray icon."""
 
 import json
 import math
@@ -8,7 +8,6 @@ import time
 import traceback
 import urllib.request
 import webbrowser
-from pathlib import Path
 
 import customtkinter as ctk
 from pynput import keyboard, mouse
@@ -37,14 +36,17 @@ from autoclicker.config import (
     LOCATION_MODES,
     MANUAL_KEYS,
     MAX_CLICKS,
+    MAX_CPS,
     MAX_DELAY,
     MAX_MINUTES,
     MAX_MS,
+    MIN_CPS,
     MIN_INTERVAL,
     MODIFIERS,
     MONO_FONT,
     MUTED,
     OK_TEXT,
+    PRESET_MODES,
     RAISED,
     STOP,
     STOP_HOVER,
@@ -53,13 +55,17 @@ from autoclicker.config import (
     UI_FONT,
     WEAPONS,
     ConfigError,
+    cps_to_interval_ms,
     effective,
     fmt_time,
+    get_resource_path,
+    interval_ms_to_cps,
     key_label,
     load_presets,
     load_settings,
     log_error,
     mc_interval,
+    merge_preset_preserving_globals,
     save_presets,
     save_settings,
 )
@@ -73,6 +79,7 @@ class App(ctk.CTk):
         ctk.set_appearance_mode("dark")
         super().__init__(fg_color=BG)
         self.title(f"{__app_name__} v{__version__}")
+        self._set_window_icon()
         self._configure_dpi_geometry()
 
         self.settings = load_settings()
@@ -84,6 +91,7 @@ class App(ctk.CTk):
         self.events = queue.SimpleQueue()
         self.session_active = False
         self.capturing = False
+        self._syncing_fields = False
         self._held_key = None
         self._fast = False
         self._run_interval = 0
@@ -108,13 +116,21 @@ class App(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self._on_window_close_request)
         self.after(50, self._poll)
 
+    def _set_window_icon(self):
+        ico = get_resource_path("assets/icon.ico")
+        if ico.exists():
+            try:
+                self.iconbitmap(str(ico))
+            except (OSError, RuntimeError):
+                pass
+
     def _configure_dpi_geometry(self):
         """Calculate window height dynamically based on screen height so Start is never cut off at 150% scaling."""
         self.update_idletasks()
         screen_h = self.winfo_screenheight() or 1080
         screen_w = self.winfo_screenwidth() or 1920
         width = 520
-        height = min(720, max(480, int(screen_h * 0.82)))
+        height = min(740, max(500, int(screen_h * 0.84)))
         x = max(0, (screen_w - width) // 2)
         y = max(0, (screen_h - height) // 2)
         self.geometry(f"{width}x{height}+{x}+{y}")
@@ -196,7 +212,7 @@ class App(ctk.CTk):
         ).grid(row=1, column=0)
         self.stats_label = ctk.CTkLabel(
             counter,
-            text="0:00  ·  0.0 clicks/s",
+            text="0:00  ·  0.0 clicks/s  ·  CPU 0.0%",
             text_color=MUTED,
             font=ctk.CTkFont(MONO_FONT, 12),
         )
@@ -218,49 +234,42 @@ class App(ctk.CTk):
         )
         self.status.grid(row=4, column=0, pady=(4, 10))
 
-        # Presets card
+        # 2-Mode Preset card: strictly "Default" (customizable & savable) and "Sword (Minecraft)" (fixed)
         pcard = self._card(page, 1, (0, 10))
         pcard.grid_columnconfigure(0, weight=1)
         prow = ctk.CTkFrame(pcard, fg_color="transparent")
-        prow.grid(row=0, column=0, sticky="ew", padx=14, pady=(10, 6))
+        prow.grid(row=0, column=0, sticky="ew", padx=14, pady=(10, 10))
         prow.grid_columnconfigure(0, weight=1)
-        self.preset_menu = ctk.CTkOptionMenu(
+        self.preset_seg = ctk.CTkSegmentedButton(
             prow,
-            values=list(self.presets.keys()),
-            height=32,
+            values=list(PRESET_MODES),
+            height=34,
             command=self._on_preset_select,
             fg_color=RAISED,
-            button_color=BORDER,
-            button_hover_color=ACCENT,
-            dropdown_fg_color=SURFACE,
-            dropdown_hover_color=RAISED,
-            dropdown_text_color=TEXT,
+            unselected_color=RAISED,
+            unselected_hover_color=BORDER,
+            selected_color=ACCENT,
+            selected_hover_color=ACCENT_HOVER,
             text_color=TEXT,
-            font=ctk.CTkFont(UI_FONT, 12),
+            text_color_disabled=DIM_TEXT,
+            font=ctk.CTkFont(UI_FONT, 13, "bold"),
         )
-        self.preset_menu.grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        self.preset_name_entry = ctk.CTkEntry(
-            prow,
-            width=120,
-            height=32,
-            placeholder_text="Preset name",
-            fg_color=RAISED,
-            border_color=BORDER,
-            text_color=TEXT,
-            font=ctk.CTkFont(UI_FONT, 12),
-        )
-        self.preset_name_entry.grid(row=0, column=1, padx=(0, 6))
+        self.preset_seg.set("Default")
+        self.preset_seg.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+
         self.save_preset_btn = ctk.CTkButton(
             prow,
-            text="Save Preset",
-            width=92,
-            height=32,
+            text="Save Default",
+            width=116,
+            height=34,
             fg_color=ACCENT,
             hover_color=ACCENT_HOVER,
+            text_color="#FFFFFF",
+            text_color_disabled=DIM_TEXT,
             font=ctk.CTkFont(UI_FONT, 12, "bold"),
-            command=self._save_custom_preset,
+            command=self._save_default_preset,
         )
-        self.save_preset_btn.grid(row=0, column=2)
+        self.save_preset_btn.grid(row=0, column=1)
 
         # Settings card
         s = self._card(page, 2, (0, 10))
@@ -305,15 +314,19 @@ class App(ctk.CTk):
             validate="key",
             validatecommand=self._float_valid,
         )
-        self.custom_speed_entry.bind("<FocusOut>", lambda _e: self._on_weapon())
-        self._row(s, 1, "Custom speed (/s)", self.custom_speed_entry, key="mc_custom_speed")
+        self.custom_speed_entry.bind(
+            "<Key>", lambda _e, w=self.custom_speed_entry: w.configure(border_color=BORDER), add="+"
+        )
+        self.custom_speed_entry.bind("<KeyRelease>", self._on_custom_speed_typed)
+        self.custom_speed_entry.bind("<FocusOut>", self._on_custom_speed_focus_out)
+        self._row(s, 1, "Custom speed (clicks/s)", self.custom_speed_entry, key="custom_speed")
 
         self.mode_seg = ctk.CTkSegmentedButton(
             s,
             values=list(ACTION_MODES),
             height=34,
             font=ctk.CTkFont(UI_FONT, 13),
-            command=lambda _v: self._refresh_states(),
+            command=lambda _v: self._on_action_mode_change(),
             fg_color=RAISED,
             unselected_color=RAISED,
             unselected_hover_color=BORDER,
@@ -329,6 +342,7 @@ class App(ctk.CTk):
             values=list(BUTTON_NAMES),
             height=34,
             font=ctk.CTkFont(UI_FONT, 13),
+            command=lambda _v: self._save(),
             fg_color=RAISED,
             unselected_color=RAISED,
             unselected_hover_color=BORDER,
@@ -338,15 +352,19 @@ class App(ctk.CTk):
             text_color_disabled=DIM_TEXT,
         )
         self._row(s, 3, "Mouse button", self.button_seg, key="button")
+
         self.interval_entry = self._entry(s)
+        self.interval_entry.bind("<KeyRelease>", self._on_interval_typed)
+        self.interval_entry.bind("<FocusOut>", lambda _e: self._save())
         self._row(s, 4, "Interval (ms)", self.interval_entry, key="interval")
+
         self.count_entry = self._entry(s)
         self._row(s, 5, "Clicks (0 = ∞)", self.count_entry)
         self.time_limit_entry = self._entry(s)
         self._row(s, 6, "Stop after (min, 0=∞)", self.time_limit_entry)
-        self.double_sw = self._switch(s)
+        self.double_sw = self._switch(s, command=self._save)
         self._row(s, 7, "Double click", self.double_sw, key="double")
-        self.jitter_sw = self._switch(s, command=self._refresh_states)
+        self.jitter_sw = self._switch(s, command=self._on_jitter_toggle)
         self._row(s, 8, "Random extra delay", self.jitter_sw, key="jitter_on")
         self.jitter_entry = self._entry(s)
         self._row(s, 9, "Up to (ms)", self.jitter_entry, last=True, key="jitter")
@@ -432,8 +450,8 @@ class App(ctk.CTk):
             font=ctk.CTkFont(UI_FONT, 12),
             text=(
                 "Click the key box, then press the new key. Esc cancels.\n"
-                "Press F8 anywhere to record the current cursor position for Fixed / Sequence mode.\n"
-                "Safety stop: move the cursor to the top-left corner to halt clicking."
+                "Switching presets never changes your Start / stop key.\n"
+                "Press F8 anywhere to record the current cursor position for Fixed / Sequence mode."
             ),
         )
         self.opt_note.grid(row=2, column=0, sticky="ew", pady=(0, 8))
@@ -560,6 +578,8 @@ class App(ctk.CTk):
         hold = self.mode_seg.get() == "Hold" and not mc
         jitter_on = bool(self.jitter_sw.get())
         free = idle and not mc
+        is_default_preset = self.preset_seg.get() == "Default"
+
         def state(ok):
             return "normal" if ok else "disabled"
 
@@ -583,9 +603,12 @@ class App(ctk.CTk):
         self._dim_entry(self.jitter_entry, interval_dim or not jitter_on)
         self.jitter_entry.configure(state=state(jitter_ok))
 
-        is_custom_speed = mc and self.weapon_menu.get() == "Custom speed"
-        self._dim_entry(self.custom_speed_entry, not is_custom_speed)
-        self.custom_speed_entry.configure(state=state(idle and is_custom_speed))
+        # Custom speed (clicks/s) is editable in Default/manual Click mode AND in MC "Custom speed" weapon mode
+        custom_speed_editable = idle and (
+            (not mc and not hold) or (mc and self.weapon_menu.get() == "Custom speed")
+        )
+        self._dim_entry(self.custom_speed_entry, not custom_speed_editable)
+        self.custom_speed_entry.configure(state=state(custom_speed_editable))
 
         for key, dim in (
             ("action_mode", mc),
@@ -594,7 +617,7 @@ class App(ctk.CTk):
             ("double", interval_dim),
             ("jitter_on", interval_dim),
             ("jitter", interval_dim or not jitter_on),
-            ("mc_custom_speed", not is_custom_speed),
+            ("custom_speed", not custom_speed_editable),
         ):
             if key in self.row_labels:
                 self.row_labels[key].configure(text_color=DIM_TEXT if dim else TEXT)
@@ -602,22 +625,94 @@ class App(ctk.CTk):
         self._dim_menu(self.weapon_menu, not mc)
         self.weapon_menu.configure(state=state(idle and mc))
         self.mc_sw.configure(state=state(idle))
+        self.preset_seg.configure(state=state(idle))
+
+        # Save Default button is enabled only when in Default mode and idle
+        can_save_default = idle and is_default_preset
+        self.save_preset_btn.configure(
+            state=state(can_save_default),
+            fg_color=ACCENT if can_save_default else DIM_BG,
+        )
+
         for w in (
             self.count_entry,
             self.time_limit_entry,
             self.delay_entry,
             self.hotkey_btn,
             self.reset_btn,
-            self.preset_menu,
-            self.save_preset_btn,
         ):
             w.configure(state=state(idle))
 
+    # ───────── live CPS <-> Interval (ms) sync ─────────
+    def _on_custom_speed_typed(self, _event=None):
+        if self._syncing_fields or self.session_active:
+            return
+        raw = self.custom_speed_entry.get().strip()
+        if not raw:
+            return
+        try:
+            val = float(raw)
+        except ValueError:
+            return
+        if val <= 0:
+            return
+
+        self._syncing_fields = True
+        try:
+            if self.mc_sw.get():
+                if self.weapon_menu.get() == "Custom speed":
+                    spd = min(max(val, 0.1), 20.0)
+                    self._put(self.interval_entry, mc_interval(spd))
+            else:
+                cps = min(max(val, MIN_CPS), MAX_CPS)
+                ms = cps_to_interval_ms(cps)
+                self._put(self.interval_entry, ms)
+                self._manual["interval"] = ms
+                self._manual["custom_cps"] = round(cps, 2)
+        finally:
+            self._syncing_fields = False
+        self._refresh_states()
+
+    def _on_custom_speed_focus_out(self, _event=None):
+        self._on_custom_speed_typed()
+        self._save()
+
+    def _on_interval_typed(self, _event=None):
+        if self._syncing_fields or self.session_active or self.mc_sw.get():
+            return
+        raw = self.interval_entry.get().strip()
+        if not raw or not raw.isdigit():
+            return
+        ms = int(raw)
+        if ms < MIN_INTERVAL:
+            return
+        self._syncing_fields = True
+        try:
+            cps = interval_ms_to_cps(min(ms, MAX_MS))
+            self._put(self.custom_speed_entry, cps)
+            self._manual["interval"] = min(ms, MAX_MS)
+            self._manual["custom_cps"] = cps
+        finally:
+            self._syncing_fields = False
+        self._refresh_states()
+
+    def _on_action_mode_change(self):
+        self._refresh_states()
+        self._refresh_hotkey_labels()
+        self._save()
+
+    def _on_jitter_toggle(self):
+        self._refresh_states()
+        self._save()
+
     # ───────── settings <-> widgets ─────────
     def _put(self, entry, value):
+        prev_state = entry.cget("state")
         entry.configure(state="normal")
         entry.delete(0, "end")
         entry.insert(0, str(value))
+        if prev_state == "disabled":
+            entry.configure(state="disabled")
 
     @staticmethod
     def _set_switch(sw, on):
@@ -627,27 +722,32 @@ class App(ctk.CTk):
         self.mode_seg.set(m.get("action_mode", "Click"))
         self.button_seg.set(m["button"])
         self._put(self.interval_entry, m["interval"])
+        cps_val = m.get("custom_cps") or interval_ms_to_cps(m["interval"])
+        self._put(self.custom_speed_entry, cps_val)
         self._put(self.jitter_entry, m["jitter"])
         self._set_switch(self.double_sw, m["double"])
         self._set_switch(self.jitter_sw, m["jitter_on"])
 
-    def _mc_ms(self):
+    def _mc_spd(self):
         w = self.weapon_menu.get()
         if w == "Custom speed":
             raw = self.custom_speed_entry.get().strip()
             try:
-                spd = max(0.1, float(raw))
+                return min(max(float(raw), 0.1), 20.0)
             except ValueError:
-                spd = 1.6
-        else:
-            spd = WEAPONS.get(w, WEAPONS["Sword"])
-        return mc_interval(spd)
+                return float(self.settings.get("mc_custom_speed", 1.6))
+        return WEAPONS.get(w, WEAPONS["Sword"])
+
+    def _mc_ms(self):
+        return mc_interval(self._mc_spd())
 
     def _write_mc(self):
-        """Show the values Minecraft mode forces (they are greyed out)."""
+        """Show the values Minecraft mode forces."""
         self.mode_seg.set("Click")
         self.button_seg.set("Left")
-        self._put(self.interval_entry, self._mc_ms())
+        spd = self._mc_spd()
+        self._put(self.custom_speed_entry, spd)
+        self._put(self.interval_entry, mc_interval(spd))
         self._set_switch(self.double_sw, False)
         self._set_switch(self.jitter_sw, False)
 
@@ -665,20 +765,27 @@ class App(ctk.CTk):
             raw = entry.get().strip()
             if raw.isdigit():
                 m[key] = min(max(int(raw), lo), MAX_MS)
+        raw_cps = self.custom_speed_entry.get().strip()
+        try:
+            val_cps = float(raw_cps)
+            if MIN_CPS <= val_cps <= MAX_CPS:
+                m["custom_cps"] = round(val_cps, 2)
+        except ValueError:
+            pass
         return m
 
     def _apply(self, cfg):
-        self._manual = {k: cfg[k] for k in MANUAL_KEYS}
+        self._manual = {k: cfg.get(k, DEFAULTS[k]) for k in MANUAL_KEYS}
         self._write_manual(self._manual)
         self._put(self.count_entry, cfg["clicks"])
         self._put(self.time_limit_entry, cfg.get("time_limit_min", 0))
         self._put(self.delay_entry, cfg["start_delay"])
-        self._put(self.custom_speed_entry, cfg.get("mc_custom_speed", 1.6))
         self.weapon_menu.set(cfg["mc_weapon"])
         self.loc_mode_seg.set(cfg.get("location_mode", "Cursor"))
         preset_name = cfg.get("active_preset", "Default")
-        if preset_name in self.presets:
-            self.preset_menu.set(preset_name)
+        if preset_name not in PRESET_MODES:
+            preset_name = "Default"
+        self.preset_seg.set(preset_name)
         for sw, on in (
             (self.mc_sw, cfg["mc_mode"]),
             (self.sound_sw, cfg.get("sound_on", True)),
@@ -688,8 +795,13 @@ class App(ctk.CTk):
         ):
             self._set_switch(sw, on)
         if cfg["mc_mode"]:
+            if cfg["mc_weapon"] == "Custom speed":
+                self._put(self.custom_speed_entry, cfg.get("mc_custom_speed", 1.6))
             self._write_mc()
         self.hotkey_id = cfg["hotkey"]
+        self.record_key_id = cfg.get("record_key", "f8")
+        if self.record_key_id == self.hotkey_id:
+            self.record_key_id = "f8" if self.hotkey_id != "f8" else "f7"
         self._refresh_states()
         self._on_topmost(save=False)
         self._refresh_hotkey_labels()
@@ -717,24 +829,30 @@ class App(ctk.CTk):
 
     def _collect(self):
         mc = bool(self.mc_sw.get())
-        custom_spd = self.settings.get("mc_custom_speed", 1.6)
-        if mc and self.weapon_menu.get() == "Custom speed":
-            custom_spd = self._float_num(
-                self.custom_speed_entry, "Custom speed", 0.1, 20.0
-            )
+        custom_mc_spd = self.settings.get("mc_custom_speed", 1.6)
         if mc:
+            if self.weapon_menu.get() == "Custom speed":
+                custom_mc_spd = self._float_num(
+                    self.custom_speed_entry, "Custom speed", 0.1, 20.0
+                )
             manual = dict(self._manual)
         else:
             mode = self.mode_seg.get()
-            interval_val = (
-                self._manual["interval"]
-                if mode == "Hold"
-                else self._num(self.interval_entry, "Interval", MIN_INTERVAL, MAX_MS)
-            )
+            if mode == "Hold":
+                interval_val = self._manual["interval"]
+                custom_cps_val = self._manual.get(
+                    "custom_cps", interval_ms_to_cps(interval_val)
+                )
+            else:
+                custom_cps_val = self._float_num(
+                    self.custom_speed_entry, "Custom speed (clicks/s)", MIN_CPS, MAX_CPS
+                )
+                interval_val = self._num(self.interval_entry, "Interval", MIN_INTERVAL, MAX_MS)
             manual = {
                 "action_mode": mode,
                 "button": self.button_seg.get(),
                 "interval": interval_val,
+                "custom_cps": round(custom_cps_val, 2),
                 "double": bool(self.double_sw.get()),
                 "jitter_on": bool(self.jitter_sw.get()),
                 "jitter": self._manual["jitter"],
@@ -751,6 +869,7 @@ class App(ctk.CTk):
                 self.time_limit_entry, "Time limit", 0, MAX_MINUTES, empty=0
             ),
             "hotkey": self.hotkey_id,
+            "record_key": self.record_key_id,
             "sound_on": bool(self.sound_sw.get()),
             "topmost": bool(self.topmost_sw.get()),
             "failsafe": bool(self.failsafe_sw.get()),
@@ -761,8 +880,8 @@ class App(ctk.CTk):
             ),
             "mc_mode": mc,
             "mc_weapon": self.weapon_menu.get(),
-            "mc_custom_speed": custom_spd,
-            "active_preset": self.preset_menu.get(),
+            "mc_custom_speed": custom_mc_spd,
+            "active_preset": self.preset_seg.get(),
         }
         self._manual = manual
         return cfg
@@ -775,6 +894,7 @@ class App(ctk.CTk):
                 **self.settings,
                 **self._manual,
                 "hotkey": self.hotkey_id,
+                "record_key": self.record_key_id,
                 "sound_on": bool(self.sound_sw.get()),
                 "topmost": bool(self.topmost_sw.get()),
                 "failsafe": bool(self.failsafe_sw.get()),
@@ -782,21 +902,38 @@ class App(ctk.CTk):
                 "location_mode": self.loc_mode_seg.get(),
                 "mc_mode": bool(self.mc_sw.get()),
                 "mc_weapon": self.weapon_menu.get(),
+                "active_preset": self.preset_seg.get(),
             }
+        # If the user is in Default mode, automatically keep the Default preset synced with their settings
+        if self.settings.get("active_preset") == "Default" and not self.settings.get("mc_mode"):
+            self.presets["Default"] = dict(self.settings)
+            save_presets(self.presets)
         save_settings(self.settings)
 
-    # ───────── Presets ─────────
+    # ───────── 2-Mode Presets (Default vs Sword) ─────────
     def _on_preset_select(self, name):
-        if self.session_active or name not in self.presets:
+        if self.session_active or name not in PRESET_MODES:
             return
-        preset_cfg = dict(self.presets[name])
-        preset_cfg["active_preset"] = name
-        self.settings = preset_cfg
+        # Save current manual settings into Default before switching to Sword
+        if name == "Sword (Minecraft)" and not self.mc_sw.get():
+            try:
+                current_cfg = self._collect()
+                current_cfg["active_preset"] = "Default"
+                self.presets["Default"] = dict(current_cfg)
+                save_presets(self.presets)
+            except ConfigError:
+                pass
+
+        target_preset = self.presets.get(name, DEFAULTS)
+        # Merge preset without EVER changing hotkey or global user preferences
+        merged = merge_preset_preserving_globals(self.settings, target_preset)
+        merged["active_preset"] = name
+        self.settings = merged
         self._apply(self.settings)
         save_settings(self.settings)
-        self._say(f"Loaded preset: {name}", OK_TEXT)
+        self._say(f"Mode: {name} (Start/stop key {key_label(self.hotkey_id)} unchanged)", OK_TEXT)
 
-    def _save_custom_preset(self):
+    def _save_default_preset(self):
         if self.session_active:
             return
         try:
@@ -804,15 +941,13 @@ class App(ctk.CTk):
         except ConfigError as err:
             self._show_error(err)
             return
-        name = self.preset_name_entry.get().strip() or self.preset_menu.get()
-        cfg["active_preset"] = name
-        self.presets[name] = dict(cfg)
+        cfg["active_preset"] = "Default"
+        self.preset_seg.set("Default")
+        self.presets["Default"] = dict(cfg)
         save_presets(self.presets)
-        self.preset_menu.configure(values=list(self.presets.keys()))
-        self.preset_menu.set(name)
-        self.preset_name_entry.delete(0, "end")
         save_settings(cfg)
-        self._say(f"Saved preset '{name}'", OK_TEXT)
+        self._refresh_states()
+        self._say("Saved your current settings to Default preset.", OK_TEXT)
 
     # ───────── Macro positions ─────────
     def _record_cursor_point(self):
@@ -840,9 +975,12 @@ class App(ctk.CTk):
         if self.session_active:
             return
         self._end_capture()
-        self._apply(DEFAULTS)
+        reset_cfg = dict(DEFAULTS)
+        self.presets["Default"] = dict(reset_cfg)
+        save_presets(self.presets)
+        self._apply(reset_cfg)
         self._save()
-        self._opt_say("Settings restored to defaults.", OK_TEXT)
+        self._opt_say("Settings restored to factory defaults.", OK_TEXT)
 
     def _on_topmost(self, save=True):
         self.attributes("-topmost", bool(self.topmost_sw.get()))
@@ -853,8 +991,13 @@ class App(ctk.CTk):
     def _on_mc_toggle(self):
         if self.mc_sw.get():
             self._manual = self._snapshot_manual()
+            if self.weapon_menu.get() == "Custom speed":
+                self._put(self.custom_speed_entry, self.settings.get("mc_custom_speed", 1.6))
             self._write_mc()
+            if self.weapon_menu.get() == "Sword":
+                self.preset_seg.set("Sword (Minecraft)")
         else:
+            self.preset_seg.set("Default")
             self._write_manual(self._manual)
         self._refresh_states()
         self._refresh_hotkey_labels()
@@ -862,7 +1005,9 @@ class App(ctk.CTk):
 
     def _on_weapon(self, _value=None):
         if self.mc_sw.get():
-            self._put(self.interval_entry, self._mc_ms())
+            if self.weapon_menu.get() == "Custom speed":
+                self._put(self.custom_speed_entry, self.settings.get("mc_custom_speed", 1.6))
+            self._write_mc()
             self._refresh_states()
             self._refresh_hotkey_labels()
         self._save()
@@ -887,7 +1032,8 @@ class App(ctk.CTk):
         elif self.mode_seg.get() == "Hold":
             self._say(f"Hold mode — holds mouse button continuously. Press {key} to start")
         else:
-            self._say(f"Ready — move the cursor to your target, then press {key}")
+            cps = self.custom_speed_entry.get().strip() or "10.0"
+            self._say(f"Ready ({cps} clicks/s) — move cursor to target, then press {key}")
         self._showing_hint = True
 
     def _switch_page(self, name):
@@ -901,8 +1047,10 @@ class App(ctk.CTk):
 
     def _refresh_hotkey_labels(self):
         label = key_label(self.hotkey_id)
+        rec_label = key_label(self.record_key_id)
         if not self.capturing:
             self.hotkey_btn.configure(text=label)
+        self.record_pos_btn.configure(text=f"Record Pos ({rec_label})")
         if self.session_active:
             self.main_btn.configure(text=f"Stop  ·  {label}")
         else:
@@ -952,6 +1100,8 @@ class App(ctk.CTk):
             self._opt_say("Modifier keys (Ctrl, Shift, Alt) can't be used alone.", ERR_TEXT)
         else:
             self.hotkey_id = kid
+            if self.record_key_id == kid:
+                self.record_key_id = "f8" if kid != "f8" else "f7"
             self._refresh_hotkey_labels()
             self._save()
             warn = " (letters also trigger while typing elsewhere)" if len(kid) == 1 else ""
@@ -970,8 +1120,11 @@ class App(ctk.CTk):
             self._show_error(err)
             return
 
+        if cfg.get("location_mode") == "Sequence" and not cfg.get("sequence_points"):
+            self._say("No sequence points recorded yet — clicking at current cursor.", MUTED)
+
         self.settings = cfg
-        save_settings(cfg)
+        self._save()
         run_cfg = effective(cfg)
         self._fast = run_cfg["interval"] < 10 and run_cfg.get("action_mode") != "Hold"
         self._run_interval = run_cfg["interval"]
@@ -1108,7 +1261,7 @@ class App(ctk.CTk):
         self.withdraw()
         if self._tray_icon is not None:
             return
-        icon_path = Path(__file__).resolve().parent.parent / "assets" / "icon.png"
+        icon_path = get_resource_path("assets/icon.png")
         try:
             img = Image.open(icon_path) if icon_path.exists() else Image.new("RGB", (64, 64), "#4A63D8")
         except (OSError, ValueError):

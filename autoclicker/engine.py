@@ -82,7 +82,6 @@ class ClickEngine:
         self.max_deviation_ms = 0.0
         self.cpu_percent = 0.0
         self._cpu_started_at = 0.0
-        self._cpu_ended_at = 0.0
 
     @property
     def active(self):
@@ -103,7 +102,7 @@ class ClickEngine:
             parts.append(
                 f"{self.avg_interval_ms:.1f} ms avg (max dev {sign}{self.max_deviation_ms:.1f} ms)"
             )
-        if self.elapsed > 0:
+        if self.started_at > 0 and self.ended_at > self.started_at:
             parts.append(f"CPU {self.cpu_percent:.1f}%")
         return " · ".join(parts)
 
@@ -145,17 +144,19 @@ class ClickEngine:
 
     @staticmethod
     def _apply_location(ctrl, loc_mode, fixed_pos, seq_pts, step_idx):
-        if loc_mode == "Fixed":
+        if loc_mode == "Fixed" and fixed_pos != (0, 0):
             ctrl.position = fixed_pos
         elif loc_mode == "Sequence" and seq_pts:
             pt = seq_pts[step_idx % len(seq_pts)]
             ctrl.position = (pt[0], pt[1])
 
     def _update_cpu_usage(self, now_wall):
+        if not self.started_at:
+            return
         wall_dt = now_wall - self.started_at
         if wall_dt > 0.001:
             cpu_dt = time.process_time() - self._cpu_started_at
-            self.cpu_percent = max(0.0, (cpu_dt / wall_dt) * 100.0)
+            self.cpu_percent = min(100.0, max(0.0, (cpu_dt / wall_dt) * 100.0))
 
     def _run(self, cfg, warmup_s):
         set_timer_resolution(True)
@@ -264,9 +265,9 @@ class ClickEngine:
                     ctrl.release(button)
                 except (OSError, RuntimeError) as exc:
                     log_error(f"Mouse release warning: {exc}")
-            self.ended_at = time.perf_counter()
-            self._update_cpu_usage(self.ended_at)
+            if self.started_at > 0:
+                self.ended_at = time.perf_counter()
+                self._update_cpu_usage(self.ended_at)
+                play_beep(started=False, enabled=sound_on)
             self.phase = "idle"
             set_timer_resolution(False)
-            if self.started_at > 0:
-                play_beep(started=False, enabled=sound_on)

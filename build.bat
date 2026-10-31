@@ -18,11 +18,11 @@ if exist dist-portable rmdir /s /q dist-portable
 if exist build-portable rmdir /s /q build-portable
 
 echo [2/4] Building app folder (used by the installer)...
-py -m PyInstaller --noconfirm --clean --windowed --name AutoClicker --icon assets\icon.ico --collect-all customtkinter --collect-all pystray --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 auto_clicker.py
+py -m PyInstaller --noconfirm --clean --windowed --name AutoClicker --icon assets\icon.ico --add-data "assets;assets" --collect-all customtkinter --collect-all pystray --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 auto_clicker.py
 if errorlevel 1 goto :fail
 
 echo [3/4] Building portable single-file exe...
-py -m PyInstaller --noconfirm --clean --onefile --windowed --name AutoClicker-portable --icon assets\icon.ico --collect-all customtkinter --collect-all pystray --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 --distpath dist-portable --workpath build-portable auto_clicker.py
+py -m PyInstaller --noconfirm --clean --onefile --windowed --name AutoClicker-portable --icon assets\icon.ico --add-data "assets;assets" --collect-all customtkinter --collect-all pystray --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 --distpath dist-portable --workpath build-portable auto_clicker.py
 if errorlevel 1 goto :fail
 
 echo [4/4] Building installer...

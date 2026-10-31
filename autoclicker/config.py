@@ -38,6 +38,7 @@ else:
 BUTTON_NAMES = ("Left", "Middle", "Right")
 ACTION_MODES = ("Click", "Hold")
 LOCATION_MODES = ("Cursor", "Fixed", "Sequence")
+PRESET_MODES = ("Default", "Sword (Minecraft)")
 
 MODIFIERS = {
     "shift", "shift_l", "shift_r", "ctrl", "ctrl_l", "ctrl_r",
@@ -45,6 +46,8 @@ MODIFIERS = {
 }
 MIN_INTERVAL = 1
 MAX_MS = 3_600_000          # 1 hour
+MIN_CPS = 0.1
+MAX_CPS = 1000.0
 MAX_CLICKS = 100_000_000
 MAX_DELAY = 30              # seconds
 MAX_MINUTES = 10_080        # 7 days in minutes
@@ -74,16 +77,32 @@ MC_MARGIN_MS = 10           # small safety margin so a hit never lands a hair ea
 
 
 def mc_interval(speed):
-    """Milliseconds between hits for a fully charged attack."""
+    """Milliseconds between hits for a fully charged Minecraft attack."""
     if speed <= 0:
         raise ValueError("Attack speed must be greater than 0.")
     return math.ceil(20 / speed - 1e-9) * TICK_MS + MC_MARGIN_MS
+
+
+def cps_to_interval_ms(cps):
+    """Convert clicks per second (CPS) to interval in milliseconds."""
+    if cps <= 0:
+        raise ValueError("Clicks per second (CPS) must be greater than 0.")
+    ms = round(1000.0 / float(cps))
+    return min(max(int(ms), MIN_INTERVAL), MAX_MS)
+
+
+def interval_ms_to_cps(interval_ms):
+    """Convert interval in milliseconds to clicks per second (CPS)."""
+    if interval_ms <= 0:
+        raise ValueError("Interval must be greater than 0.")
+    return round(1000.0 / float(interval_ms), 2)
 
 
 DEFAULTS = {
     "action_mode": "Click",
     "button": "Left",
     "interval": 100,
+    "custom_cps": 10.0,
     "clicks": 0,
     "time_limit_min": 0,
     "double": False,
@@ -105,38 +124,36 @@ DEFAULTS = {
     "sequence_points": [],
     "active_preset": "Default",
 }
-MANUAL_KEYS = ("action_mode", "button", "interval", "double", "jitter_on", "jitter")
+MANUAL_KEYS = ("action_mode", "button", "interval", "custom_cps", "double", "jitter_on", "jitter")
+
+# Keys that belong to the user's global preferences and must NEVER be overwritten when switching presets
+GLOBAL_OPTION_KEYS = (
+    "hotkey",
+    "record_key",
+    "start_delay",
+    "sound_on",
+    "topmost",
+    "failsafe",
+    "minimize_to_tray",
+    "location_mode",
+    "fixed_x",
+    "fixed_y",
+    "sequence_points",
+)
 
 BUILTIN_PRESETS = {
     "Default": dict(DEFAULTS),
     "Sword (Minecraft)": {
         **DEFAULTS,
         "action_mode": "Click",
-        "mc_mode": True,
-        "mc_weapon": "Sword",
-        "active_preset": "Sword (Minecraft)",
-    },
-    "Mob Farm (Sword AFK)": {
-        **DEFAULTS,
-        "action_mode": "Click",
-        "mc_mode": True,
-        "mc_weapon": "Sword",
-        "sound_on": True,
-        "active_preset": "Mob Farm (Sword AFK)",
-    },
-    "Mining / Break Blocks (Hold)": {
-        **DEFAULTS,
-        "action_mode": "Hold",
         "button": "Left",
-        "mc_mode": False,
-        "active_preset": "Mining / Break Blocks (Hold)",
-    },
-    "AFK Right-Click / Fishing (Hold)": {
-        **DEFAULTS,
-        "action_mode": "Hold",
-        "button": "Right",
-        "mc_mode": False,
-        "active_preset": "AFK Right-Click / Fishing (Hold)",
+        "mc_mode": True,
+        "mc_weapon": "Sword",
+        "interval": mc_interval(WEAPONS["Sword"]),
+        "double": False,
+        "jitter_on": False,
+        "jitter": 0,
+        "active_preset": "Sword (Minecraft)",
     },
 }
 
@@ -144,6 +161,12 @@ CONFIG_DIR = Path(os.environ.get("APPDATA") or Path.home() / ".config") / "AutoC
 CONFIG_PATH = CONFIG_DIR / "settings.json"
 PRESETS_PATH = CONFIG_DIR / "presets.json"
 LOG_PATH = CONFIG_DIR / "error.log"
+
+
+def get_resource_path(relative_path):
+    """Resolve asset path both in normal Python execution and inside PyInstaller onefile/onedir bundles."""
+    base_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+    return base_dir / relative_path
 
 
 def sanitize_settings(data):
@@ -184,19 +207,33 @@ def sanitize_settings(data):
         cfg["mc_weapon"] = DEFAULTS["mc_weapon"]
     if cfg["location_mode"] not in LOCATION_MODES:
         cfg["location_mode"] = DEFAULTS["location_mode"]
+    if cfg["active_preset"] not in PRESET_MODES:
+        cfg["active_preset"] = DEFAULTS["active_preset"]
 
     cfg["interval"] = min(max(cfg["interval"], MIN_INTERVAL), MAX_MS)
+    cfg["custom_cps"] = round(min(max(float(cfg["custom_cps"]), MIN_CPS), MAX_CPS), 2)
     cfg["clicks"] = min(max(cfg["clicks"], 0), MAX_CLICKS)
     cfg["time_limit_min"] = min(max(cfg["time_limit_min"], 0), MAX_MINUTES)
     cfg["jitter"] = min(max(cfg["jitter"], 0), MAX_MS)
     cfg["start_delay"] = min(max(cfg["start_delay"], 0), MAX_DELAY)
-    cfg["mc_custom_speed"] = min(max(float(cfg["mc_custom_speed"]), 0.1), 20.0)
+    cfg["mc_custom_speed"] = round(min(max(float(cfg["mc_custom_speed"]), 0.1), 20.0), 2)
 
     if not cfg["hotkey"] or cfg["hotkey"] in MODIFIERS:
         cfg["hotkey"] = DEFAULTS["hotkey"]
     if not cfg["record_key"] or cfg["record_key"] in MODIFIERS:
         cfg["record_key"] = DEFAULTS["record_key"]
+    if cfg["record_key"] == cfg["hotkey"]:
+        cfg["record_key"] = "f8" if cfg["hotkey"] != "f8" else "f7"
     return cfg
+
+
+def merge_preset_preserving_globals(current_cfg, preset_cfg):
+    """Apply a preset while strictly preserving start/stop hotkey and global user options."""
+    merged = sanitize_settings(preset_cfg)
+    for key in GLOBAL_OPTION_KEYS:
+        if key in current_cfg:
+            merged[key] = current_cfg[key]
+    return sanitize_settings(merged)
 
 
 def load_settings(path=CONFIG_PATH):
@@ -219,26 +256,33 @@ def save_settings(cfg, path=CONFIG_PATH):
 
 
 def load_presets(path=PRESETS_PATH):
-    presets = {k: sanitize_settings(v) for k, v in BUILTIN_PRESETS.items()}
+    """Load the two modes: customizable 'Default' and fixed 'Sword (Minecraft)'."""
+    presets = {
+        "Default": sanitize_settings(BUILTIN_PRESETS["Default"]),
+        "Sword (Minecraft)": sanitize_settings(BUILTIN_PRESETS["Sword (Minecraft)"]),
+    }
     try:
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
-        if isinstance(raw, dict):
-            for name, pdata in raw.items():
-                if isinstance(name, str) and name.strip() and isinstance(pdata, dict):
-                    s = sanitize_settings(pdata)
-                    s["active_preset"] = name.strip()
-                    presets[name.strip()] = s
+        if isinstance(raw, dict) and isinstance(raw.get("Default"), dict):
+            user_default = sanitize_settings(raw["Default"])
+            user_default["active_preset"] = "Default"
+            presets["Default"] = user_default
     except (OSError, ValueError):
         pass
     return presets
 
 
 def save_presets(presets, path=PRESETS_PATH):
+    """Persist the user's saved 'Default' preset so it is remembered across restarts."""
     try:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "Default": sanitize_settings(presets.get("Default", DEFAULTS)),
+        }
+        payload["Default"]["active_preset"] = "Default"
         tmp = target.with_suffix(".tmp")
-        tmp.write_text(json.dumps(presets, indent=2), encoding="utf-8")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         os.replace(tmp, target)
     except OSError:
         pass

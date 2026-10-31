@@ -41,6 +41,7 @@ jobs:
         run: >
           python -m PyInstaller --noconfirm --clean --windowed
           --name AutoClicker --icon assets/icon.ico
+          --add-data "assets;assets"
           --collect-all customtkinter --collect-all pystray
           --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32
           auto_clicker.py
@@ -49,6 +50,7 @@ jobs:
         run: >
           python -m PyInstaller --noconfirm --clean --onefile --windowed
           --name AutoClicker-portable --icon assets/icon.ico
+          --add-data "assets;assets"
           --collect-all customtkinter --collect-all pystray
           --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32
           --distpath dist-portable --workpath build-portable
